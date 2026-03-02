@@ -1,28 +1,51 @@
 #include <WiFi.h>
+#include <Wire.h>
+#include <MPU6050.h>
 #include "DHT.h"
+#include <math.h>
 
-//Wifi Credentials
+// WiFi
 const char* ssid = "WIFI_SSID";
-const char* password = "PASsWORD";
-
+const char* password = "PASSWORD";
 WiFiServer server(80);
 
-//MQ2 Sensor
+// MQ2
 #define MQ2_A0 34  
 
-//DHT22 Sensor
+// DHT22
 #define DHTPIN 4 
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
+// MPU6050
+MPU6050 mpu;
+
+int16_t ax, ay, az;
+int16_t gx, gy, gz;
+
+bool freeFall = false;
+bool rotationDetected = false;
+bool impactDetected = false;
+bool fallConfirmed = false;
+
+unsigned long impactTime = 0;
+
 void setup() {
+
   Serial.begin(115200);
   delay(100);
 
+  Wire.begin(21, 22);   
+
+  mpu.initialize();
+
+  if (mpu.testConnection())
+    Serial.println("MPU6050 Connected Successfully!");
+  else
+    Serial.println("MPU6050 Connection Failed!");
 
   dht.begin();
 
-  //Connect to WiFi
   Serial.println("\nConnecting to WiFi...");
   WiFi.begin(ssid, password);
 
@@ -40,21 +63,52 @@ void setup() {
 
 void loop() {
 
-  WiFiClient client = server.available();
-  if (!client) return;
+  //Fall Detection
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
-  Serial.println("New Client Connected");
+  float AccX = ax / 16384.0;
+  float AccY = ay / 16384.0;
+  float AccZ = az / 16384.0;
 
-  while (!client.available()) {
-    delay(1);
+  float totalAcc = sqrt(AccX*AccX + AccY*AccY + AccZ*AccZ);
+  float totalGyro = sqrt(gx*gx + gy*gy + gz*gz) / 131.0;
+
+  //Freefall
+  if (totalAcc < 0.5 && !freeFall) {
+    freeFall = true;
+    Serial.println("Free fall detected");
   }
 
-  client.readStringUntil('\r');
+  //Rotation
+  if (freeFall && totalGyro > 200) {
+    rotationDetected = true;
+    Serial.println("Fast rotation detected");
+  }
 
-  //Reading Sensors
+  //Impact
+  if (rotationDetected && totalAcc > 2.5) {
+    impactDetected = true;
+    impactTime = millis();
+    Serial.println("Impact detected");
+  }
 
+  //Inactivity
+  if (impactDetected) {
+    if (millis() - impactTime > 3000) {
+      if (totalGyro < 10) {
+        Serial.println("FALL CONFIRMED");
+        fallConfirmed = true;
+
+        // Reset states
+        freeFall = false;
+        rotationDetected = false;
+        impactDetected = false;
+      }
+    }
+  }
+
+  //Sensor Readings
   int gasLevel = analogRead(MQ2_A0);
-
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
 
@@ -63,7 +117,7 @@ void loop() {
     temperature = 0;
   }
 
-  //Gas Status
+  // Gas Status
   String gasStatus;
 
   if (gasLevel < 1000)
@@ -75,16 +129,21 @@ void loop() {
   else
     gasStatus = "Heavy Gas Concentration Detected!";
 
-  //Serial Printing
-
+  // Serial Output
   Serial.print("Gas: ");
   Serial.print(gasLevel);
   Serial.print(" | Temp: ");
   Serial.print(temperature);
   Serial.print("C | Humidity: ");
-  Serial.println(humidity);
+  Serial.print(humidity);
+  Serial.print(" | Fall: ");
+  Serial.println(fallConfirmed ? "YES" : "NO");
 
-  //Response to CLient
+  //WiFi Server
+  WiFiClient client = server.available();
+  if (!client) return;
+
+  client.readStringUntil('\r');
 
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: application/json");
@@ -105,10 +164,15 @@ void loop() {
   client.print(humidity);
   client.print(",");
 
+  client.print("\"fall\":");
+  client.print(fallConfirmed ? "true" : "false");
+  client.print(",");
+
   client.print("\"status\":\"");
   client.print(gasStatus);
   client.print("\"");
   client.print("}");
 
-  delay(1);
+  fallConfirmed = false;
+  delay(100);
 }
