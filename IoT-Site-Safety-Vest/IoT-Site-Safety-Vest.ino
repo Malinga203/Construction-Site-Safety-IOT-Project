@@ -1,17 +1,17 @@
-#include <ESP8266WiFi.h>
+#include <WiFi.h>
 #include "DHT.h"
 
-/* WiFi Config */
-const char* ssid = "Dialog 4G 091";
-const char* password = "nazeef123";
+//Wifi Credentials
+const char* ssid = "WIFI_SSID";
+const char* password = "PASsWORD";
 
 WiFiServer server(80);
 
-/* MQ2 Sensor */
-#define MQ2_A0 A0
+//MQ2 Sensor
+#define MQ2_A0 34  
 
-/* DHT22 Sensor */
-#define DHTPIN D4
+//DHT22 Sensor
+#define DHTPIN 4 
 #define DHTTYPE DHT22
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -19,10 +19,10 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  /* Start Sensors */
+
   dht.begin();
 
-  /* WiFi Connect */
+  //Connect to WiFi
   Serial.println("\nConnecting to WiFi...");
   WiFi.begin(ssid, password);
 
@@ -38,7 +38,6 @@ void setup() {
   server.begin();
 }
 
-/* ---------- LOOP ---------- */
 void loop() {
 
   WiFiClient client = server.available();
@@ -52,7 +51,7 @@ void loop() {
 
   client.readStringUntil('\r');
 
-  /* -------- Sensor Readings -------- */
+  //Reading Sensors
 
   int gasLevel = analogRead(MQ2_A0);
 
@@ -64,19 +63,19 @@ void loop() {
     temperature = 0;
   }
 
-  /* Gas Status Logic */
+  //Gas Status
   String gasStatus;
 
-  if (gasLevel < 29)
+  if (gasLevel < 1000)
     gasStatus = "Clean Air";
-  else if (gasLevel < 30)
+  else if (gasLevel < 1500)
     gasStatus = "Possible Alcohol/Smoke";
-  else if (gasLevel < 50)
+  else if (gasLevel < 2500)
     gasStatus = "Possible LPG or Methane";
   else
     gasStatus = "Heavy Gas Concentration Detected!";
 
-  /* -------- Serial Monitor -------- */
+  //Serial Printing
 
   Serial.print("Gas: ");
   Serial.print(gasLevel);
@@ -85,7 +84,7 @@ void loop() {
   Serial.print("C | Humidity: ");
   Serial.println(humidity);
 
-  /* -------- JSON Response -------- */
+  //Response to CLient
 
   client.println("HTTP/1.1 200 OK");
   client.println("Content-Type: application/json");
@@ -109,7 +108,6 @@ void loop() {
   client.print("\"status\":\"");
   client.print(gasStatus);
   client.print("\"");
-
   client.print("}");
 
   delay(1);
