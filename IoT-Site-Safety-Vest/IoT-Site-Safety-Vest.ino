@@ -12,6 +12,9 @@ WiFiServer server(80);
 // MQ2
 #define MQ2_A0 34  
 
+// MQ135
+#define MQ135_A0 35
+
 // DHT22
 #define DHTPIN 4 
 #define DHTTYPE DHT22
@@ -63,7 +66,7 @@ void setup() {
 
 void loop() {
 
-  //Fall Detection
+  // FALL DETECTION
   mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 
   float AccX = ax / 16384.0;
@@ -73,33 +76,28 @@ void loop() {
   float totalAcc = sqrt(AccX*AccX + AccY*AccY + AccZ*AccZ);
   float totalGyro = sqrt(gx*gx + gy*gy + gz*gz) / 131.0;
 
-  //Freefall
   if (totalAcc < 0.5 && !freeFall) {
     freeFall = true;
     Serial.println("Free fall detected");
   }
 
-  //Rotation
   if (freeFall && totalGyro > 200) {
     rotationDetected = true;
     Serial.println("Fast rotation detected");
   }
 
-  //Impact
   if (rotationDetected && totalAcc > 2.5) {
     impactDetected = true;
     impactTime = millis();
     Serial.println("Impact detected");
   }
 
-  //Inactivity
   if (impactDetected) {
     if (millis() - impactTime > 3000) {
       if (totalGyro < 10) {
         Serial.println("FALL CONFIRMED");
         fallConfirmed = true;
 
-        // Reset states
         freeFall = false;
         rotationDetected = false;
         impactDetected = false;
@@ -107,8 +105,10 @@ void loop() {
     }
   }
 
-  //Sensor Readings
+  // SENSOR READINGS
   int gasLevel = analogRead(MQ2_A0);
+  int airQuality = analogRead(MQ135_A0);
+
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
 
@@ -117,29 +117,48 @@ void loop() {
     temperature = 0;
   }
 
-  // Gas Status
+  // GAS STATUS (MQ2)
   String gasStatus;
 
   if (gasLevel < 1000)
     gasStatus = "Clean Air";
   else if (gasLevel < 1500)
-    gasStatus = "Possible Alcohol/Smoke";
+    gasStatus = "Possible Smoke";
   else if (gasLevel < 2500)
     gasStatus = "Possible LPG or Methane";
   else
-    gasStatus = "Heavy Gas Concentration Detected!";
+    gasStatus = "Heavy Gas Leak";
 
-  // Serial Output
-  Serial.print("Gas: ");
+  // AIR QUALITY STATUS (MQ135)
+  String airStatus;
+
+  if (airQuality < 1000)
+    airStatus = "Good Air";
+  else if (airQuality < 2000)
+    airStatus = "Moderate Pollution";
+  else if (airQuality < 3000)
+    airStatus = "Unhealthy Air";
+  else
+    airStatus = "Dangerous Air Quality";
+
+  // SERIAL OUTPUT
+  Serial.print("MQ2 Gas: ");
   Serial.print(gasLevel);
+
+  Serial.print(" | MQ135 Air: ");
+  Serial.print(airQuality);
+
   Serial.print(" | Temp: ");
   Serial.print(temperature);
+
   Serial.print("C | Humidity: ");
   Serial.print(humidity);
+
   Serial.print(" | Fall: ");
   Serial.println(fallConfirmed ? "YES" : "NO");
 
-  //WiFi Server
+
+  // WIFI SERVER
   WiFiClient client = server.available();
   if (!client) return;
 
@@ -152,8 +171,13 @@ void loop() {
   client.println();
 
   client.print("{");
+
   client.print("\"gasLevel\":");
   client.print(gasLevel);
+  client.print(",");
+
+  client.print("\"airQuality\":");
+  client.print(airQuality);
   client.print(",");
 
   client.print("\"temperature\":");
@@ -168,9 +192,14 @@ void loop() {
   client.print(fallConfirmed ? "true" : "false");
   client.print(",");
 
-  client.print("\"status\":\"");
+  client.print("\"gasStatus\":\"");
   client.print(gasStatus);
+  client.print("\",");
+
+  client.print("\"airStatus\":\"");
+  client.print(airStatus);
   client.print("\"");
+
   client.print("}");
 
   fallConfirmed = false;
