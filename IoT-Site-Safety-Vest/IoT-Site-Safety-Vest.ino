@@ -5,8 +5,8 @@
 #include <math.h>
 
 // WiFi
-const char* ssid = "WIFI_SSID";
-const char* password = "PASSWORD";
+const char* ssid = "Redmi Note 13";
+const char* password = "nazeef123";
 WiFiServer server(80);
 
 // MQ2
