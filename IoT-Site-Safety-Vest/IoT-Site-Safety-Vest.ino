@@ -2,206 +2,269 @@
 #include <Wire.h>
 #include <MPU6050.h>
 #include "DHT.h"
-#include <math.h>
+#include <Firebase_ESP_Client.h>
+#include <time.h>
 
-// WiFi
+#include "addons/TokenHelper.h"
+#include "addons/RTDBHelper.h"
+
+// WIFI
 const char* ssid = "Redmi Note 13";
 const char* password = "nazeef123";
-WiFiServer server(80);
 
-// MQ2
-#define MQ2_A0 34  
+// FIREBASE
+#define API_KEY "AIzaSyAeWvWmLjq_DeCtZPcptmgYt1HM41FtyxI"
+#define DATABASE_URL "https://iot-smart-vest-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define USER_EMAIL "malingalakmal2003@gmail.com"
+#define USER_PASSWORD "123456"
 
-// MQ135
+// VEST ID
+#define VEST_ID "5BD386"
+
+// SENSOR PINS
+#define MQ2_A0 34
 #define MQ135_A0 35
-
-// DHT22
-#define DHTPIN 4 
+#define DHTPIN 4
 #define DHTTYPE DHT22
-DHT dht(DHTPIN, DHTTYPE);
+#define REED_PIN 32
+#define WIFI_LED 2
 
-// MPU6050
+DHT dht(DHTPIN, DHTTYPE);
 MPU6050 mpu;
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
 
-bool freeFall = false;
-bool rotationDetected = false;
-bool impactDetected = false;
-bool fallConfirmed = false;
+unsigned long sendDataPrevMillis = 0;
 
-unsigned long impactTime = 0;
+// MPU DATA
+int16_t ax, ay, az, gx, gy, gz;
 
-void setup() {
+//FALL DETECTION VARIABLES
+bool fallPossible = false;       
+bool fallConfirmed = false;      
+unsigned long fallStartTime = 0;
+const unsigned long FALL_DURATION = 3000; 
+int fallCount = 0;
 
+// GET TIME 
+String getTime()
+{
+  time_t now;
+  time(&now);
+
+  struct tm *timeinfo = localtime(&now);
+
+  char buffer[30];
+  strftime(buffer,sizeof(buffer),"%Y-%m-%d %H:%M:%S",timeinfo);
+
+  return String(buffer);
+}
+
+// GET ZONE 
+String getZone()
+{
+  String path = "/workers/" + String(VEST_ID) + "/zone";
+
+  if(Firebase.RTDB.getString(&fbdo,path))
+    return fbdo.stringData();
+
+  return "Unknown";
+}
+
+// STORE FALL LOG 
+void logFall()
+{
+  String countPath = "/fall_logs/" + String(VEST_ID) + "/count";
+
+  if(Firebase.RTDB.getInt(&fbdo,countPath))
+    fallCount = fbdo.intData();
+  else
+    fallCount = 0;
+
+  fallCount++;
+
+  Firebase.RTDB.setInt(&fbdo,countPath,fallCount);
+
+  String timeNow = getTime();
+  String zone = getZone();
+
+  String logPath = "/fall_logs/" + String(VEST_ID) + "/logs/fall" + String(fallCount);
+
+  Firebase.RTDB.setString(&fbdo,logPath + "/time",timeNow);
+  Firebase.RTDB.setString(&fbdo,logPath + "/zone",zone);
+
+  Serial.println("===== FALL LOGGED =====");
+  Serial.print("Fall #: "); Serial.println(fallCount);
+  Serial.print("Zone: "); Serial.println(zone);
+  Serial.print("Time: "); Serial.println(timeNow);
+}
+
+
+void setup()
+{
   Serial.begin(115200);
-  delay(100);
 
-  Wire.begin(21, 22);   
+  Wire.begin(21,22);
+
+  pinMode(REED_PIN,INPUT_PULLUP);
+  pinMode(WIFI_LED,OUTPUT);
+
+  digitalWrite(WIFI_LED,LOW);
 
   mpu.initialize();
-
-  if (mpu.testConnection())
-    Serial.println("MPU6050 Connected Successfully!");
-  else
-    Serial.println("MPU6050 Connection Failed!");
-
   dht.begin();
 
-  Serial.println("\nConnecting to WiFi...");
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid,password);
 
-  while (WiFi.status() != WL_CONNECTED) {
+  Serial.print("Connecting WiFi");
+
+  while(WiFi.status()!=WL_CONNECTED)
+  {
     delay(500);
     Serial.print(".");
   }
 
-  Serial.println("\nWiFi connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
+  digitalWrite(WIFI_LED,HIGH);
+  Serial.println("\nWiFi Connected");
 
-  server.begin();
+  config.api_key = API_KEY;
+  config.database_url = DATABASE_URL;
+
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  config.token_status_callback = tokenStatusCallback;
+
+  Firebase.begin(&config,&auth);
+  Firebase.reconnectWiFi(true);
+
+  configTime(0,0,"pool.ntp.org");
 }
 
-void loop() {
+// FALL DETECTION FUNCTION 
+void checkFall(float AccX)
+{
+  // Normal
+  if(abs(AccX) > 0.7) 
+  {
+    // Reset horizontal timing
+    fallPossible = false;
+    fallStartTime = 0;
 
-  // FALL DETECTION
-  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+    // Reset confirmed fall only when vest is vertical
+    if(fallConfirmed)
+    {
+      Serial.println("Vest returned vertical. Fall reset.");
+      fallConfirmed = false;
+    }
+    return;
+  }
+
+  // Vest is horizontal 
+  if(abs(AccX) <= 0.3) 
+  {
+    if(!fallPossible && !fallConfirmed) 
+    {
+      // Start timing horizontal position
+      fallPossible = true;
+      fallStartTime = millis();
+      Serial.println("Possible Fall Detected: Horizontal Orientation");
+    } 
+    else if(fallPossible && (millis() - fallStartTime >= FALL_DURATION) && !fallConfirmed) 
+    {
+      // Confirm fall after 3 seconds horizontal
+      fallConfirmed = true;
+      Serial.println("===== FALL CONFIRMED =====");
+      logFall(); // log to Firebase
+      fallPossible = false; // stop timing, stay confirmed
+    }
+  }
+}
+
+void loop()
+{
+  mpu.getMotion6(&ax,&ay,&az,&gx,&gy,&gz);
 
   float AccX = ax / 16384.0;
   float AccY = ay / 16384.0;
   float AccZ = az / 16384.0;
 
   float totalAcc = sqrt(AccX*AccX + AccY*AccY + AccZ*AccZ);
-  float totalGyro = sqrt(gx*gx + gy*gy + gz*gz) / 131.0;
 
-  if (totalAcc < 0.5 && !freeFall) {
-    freeFall = true;
-    Serial.println("Free fall detected");
-  }
+  Serial.print("ACC:");
+  Serial.println(totalAcc);
 
-  if (freeFall && totalGyro > 200) {
-    rotationDetected = true;
-    Serial.println("Fast rotation detected");
-  }
+  //FALL DETECTION 
+  checkFall(AccX); //X axis is used to determine if the vest is vertical or horiznatl
 
-  if (rotationDetected && totalAcc > 2.5) {
-    impactDetected = true;
-    impactTime = millis();
-    Serial.println("Impact detected");
-  }
-
-  if (impactDetected) {
-    if (millis() - impactTime > 3000) {
-      if (totalGyro < 10) {
-        Serial.println("FALL CONFIRMED");
-        fallConfirmed = true;
-
-        freeFall = false;
-        rotationDetected = false;
-        impactDetected = false;
-      }
-    }
-  }
-
-  // SENSOR READINGS
+  //SENSOR READINGS
   int gasLevel = analogRead(MQ2_A0);
   int airQuality = analogRead(MQ135_A0);
 
   float humidity = dht.readHumidity();
   float temperature = dht.readTemperature();
 
-  if (isnan(humidity) || isnan(temperature)) {
-    humidity = 0;
-    temperature = 0;
-  }
+  if(isnan(humidity)) humidity = 0;
+  if(isnan(temperature)) temperature = 0;
 
-  // GAS STATUS (MQ2)
+  bool vestStatus = digitalRead(REED_PIN) == LOW;
+
+  //GAS STATUS
   String gasStatus;
-
-  if (gasLevel < 1000)
+  if(gasLevel < 1000)
     gasStatus = "Clean Air";
-  else if (gasLevel < 1500)
+  else if(gasLevel < 1500)
     gasStatus = "Possible Smoke";
-  else if (gasLevel < 2500)
+  else if(gasLevel < 2500)
     gasStatus = "Possible LPG or Methane";
   else
     gasStatus = "Heavy Gas Leak";
 
-  // AIR QUALITY STATUS (MQ135)
+  // AIR STATUS
   String airStatus;
-
-  if (airQuality < 1000)
+  if(airQuality < 1000)
     airStatus = "Good Air";
-  else if (airQuality < 2000)
+  else if(airQuality < 2000)
     airStatus = "Moderate Pollution";
-  else if (airQuality < 3000)
+  else if(airQuality < 3000)
     airStatus = "Unhealthy Air";
   else
     airStatus = "Dangerous Air Quality";
 
-  // SERIAL OUTPUT
-  Serial.print("MQ2 Gas: ");
-  Serial.print(gasLevel);
+  //FIREBASE UPDATE
+  if(millis() - sendDataPrevMillis > 1000)
+  {
+    sendDataPrevMillis = millis();
 
-  Serial.print(" | MQ135 Air: ");
-  Serial.print(airQuality);
+    String vestPath = "/smart_vests/" + String(VEST_ID);
 
-  Serial.print(" | Temp: ");
-  Serial.print(temperature);
+    Firebase.RTDB.setFloat(&fbdo, vestPath + "/temperature", temperature);
+    Firebase.RTDB.setFloat(&fbdo, vestPath + "/humidity", humidity);
 
-  Serial.print("C | Humidity: ");
-  Serial.print(humidity);
+    Firebase.RTDB.setInt(&fbdo, vestPath + "/gasLevel", gasLevel);
+    Firebase.RTDB.setString(&fbdo, vestPath + "/gasStatus", gasStatus);
 
-  Serial.print(" | Fall: ");
-  Serial.println(fallConfirmed ? "YES" : "NO");
+    Firebase.RTDB.setInt(&fbdo, vestPath + "/airQuality", airQuality);
+    Firebase.RTDB.setString(&fbdo, vestPath + "/airStatus", airStatus);
 
+    Firebase.RTDB.setBool(&fbdo, vestPath + "/fall", fallConfirmed);
 
-  // WIFI SERVER
-  WiFiClient client = server.available();
-  if (!client) return;
+    Firebase.RTDB.setBool(&fbdo,"/workers/" + String(VEST_ID) + "/vestStatus",vestStatus);
 
-  client.readStringUntil('\r');
+    //Serial Debugging
+    Serial.println("------ SENSOR DATA ------");
+    Serial.print("Temp: "); Serial.println(temperature);
+    Serial.print("Humidity: "); Serial.println(humidity);
+    Serial.print("Gas: "); Serial.print(gasLevel);
+    Serial.print(" | "); Serial.println(gasStatus);
+    Serial.print("Air: "); Serial.print(airQuality);
+    Serial.print(" | "); Serial.println(airStatus);
+    Serial.print("Fall: "); Serial.println(fallConfirmed ? "YES":"NO");
+    Serial.print("Vest: "); Serial.println(vestStatus ? "WORN":"REMOVED");
+    Serial.println("-------------------------");
+  }
 
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-Type: application/json");
-  client.println("Access-Control-Allow-Origin: *");
-  client.println("Connection: close");
-  client.println();
-
-  client.print("{");
-
-  client.print("\"gasLevel\":");
-  client.print(gasLevel);
-  client.print(",");
-
-  client.print("\"airQuality\":");
-  client.print(airQuality);
-  client.print(",");
-
-  client.print("\"temperature\":");
-  client.print(temperature);
-  client.print(",");
-
-  client.print("\"humidity\":");
-  client.print(humidity);
-  client.print(",");
-
-  client.print("\"fall\":");
-  client.print(fallConfirmed ? "true" : "false");
-  client.print(",");
-
-  client.print("\"gasStatus\":\"");
-  client.print(gasStatus);
-  client.print("\",");
-
-  client.print("\"airStatus\":\"");
-  client.print(airStatus);
-  client.print("\"");
-
-  client.print("}");
-
-  fallConfirmed = false;
-  delay(100);
+  delay(200);
 }
