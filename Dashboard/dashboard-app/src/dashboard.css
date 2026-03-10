@@ -1,0 +1,86 @@
+body{
+  background:#f4f7fb;
+  font-family: "Segoe UI", sans-serif;
+}
+
+/* SIDEBAR */
+
+.sidebar{
+  width:240px;
+  background:linear-gradient(180deg,#0f172a,#243552);
+  min-height:100vh;
+  color:white;
+  padding:25px;
+}
+
+.sidebar h3{
+  font-weight:700;
+  margin-bottom:30px;
+}
+
+.sidebar button{
+  background:none;
+  border:none;
+  color:white;
+  padding:12px;
+  width:100%;
+  text-align:left;
+  border-radius:10px;
+  margin-bottom:10px;
+  font-size:16px;
+}
+
+.sidebar button:hover{
+  background:#334155;
+}
+
+/* MAIN */
+
+.main{
+  flex:1;
+  padding:30px;
+}
+
+/* METRIC CARDS */
+
+.metric-card{
+  border:none;
+  border-radius:16px;
+  padding:20px;
+  background:white;
+  box-shadow:0 10px 25px rgba(0,0,0,0.08);
+  transition:0.2s;
+}
+
+.metric-card:hover{
+  transform:translateY(-4px);
+}
+
+.metric-title{
+  font-size:14px;
+  color:#64748b;
+}
+
+.metric-value{
+  font-size:28px;
+  font-weight:700;
+}
+
+/* GRAPH CARD */
+
+.graph-card{
+  border:none;
+  border-radius:16px;
+  padding:20px;
+  background:white;
+  box-shadow:0 10px 25px rgba(0,0,0,0.08);
+}
+
+/* ZONE BOX */
+
+.zone-box{
+  border-radius:14px;
+  background:white;
+  padding:20px;
+  box-shadow:0 10px 25px rgba(0,0,0,0.08);
+}
